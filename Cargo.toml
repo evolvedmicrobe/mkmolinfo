@@ -1,0 +1,20 @@
+[package]
+name = "mkmolinfo"
+version = "0.1.0"
+authors = ["Nigel Delaney <nigel.delaney@10xgenomics.com>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.32"
+rust-htslib = ">=0.21"
+regex="1"
+failure="0.1.5"
+failure_derive="0.1.5"
+ndarray=">0.0.0"
+#hdf5-rs="0.2.0"
+
+
+[dependencies.hdf5-rs]
+#features = ["conda"]
+git = "https://github.com/pmarks/hdf5-rs.git"
+branch= "pmarks/linking"
