@@ -39,7 +39,7 @@ struct barcode_counts {
 
 fn barcode_str_to_u64(arr : &[u8]) -> u64 {
     let mut result : u64 = 0;
-    for nuc in arr[..arr.len() - 2].iter() {
+    for nuc in arr.iter() {
         result = result << 2;
         let coding = match nuc {
             b'A' => 0,
