@@ -3,26 +3,23 @@ use clap::{Arg, App};
 
 
 use std::path::Path;
-//use std::fs::File;
 use std::collections::{HashMap};
 
 extern crate ndarray;
-use ndarray::Array;
-use ndarray::Zip;
-use ndarray::Array1;
+//use ndarray::Array;
+//use ndarray::Zip;
+//use ndarray::Array1;
 
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
 //use rust_htslib::bam::header::{Header, HeaderRecord};
 use rust_htslib::bam::record::{Aux,Record};
 
-mod filefinder;
-mod barcode_umi_tracker;
-extern crate failure;
-#[macro_use] extern crate failure_derive;
+//extern crate failure;
+//#[macro_use] extern crate failure_derive;
 
 extern crate h5;
-use h5::File;
+//use h5::File;
 
 //use hdf5_rs::prelude::*;
 
@@ -62,15 +59,15 @@ fn combine_bc_and_umi(bc: u64, umi:u64) -> u64 {
     return combined;
 }
 
-fn parse_bam_for_metrics(bamname : &Path) -> HashMap<u64, barcode_counts> {
+fn parse_bam_for_metrics(bamname : &Path, n_mols : usize) -> HashMap<u64, barcode_counts> {
     let mut in_bam = bam::Reader::from_path(bamname).expect("Failed to open BAM");
     let mut cnt: i32 = 1;
     let mut record: Record = Record::new();
-    let mut bc_recs: HashMap<u64, barcode_counts> = HashMap::new();
+    let mut bc_recs: HashMap<u64, barcode_counts> = HashMap::with_capacity(n_mols);
 
     while let Ok(_) = in_bam.read(&mut record) {
         cnt += 1;
-        if cnt % 1000000 == 0 {
+        if cnt % 10000000 == 0 {
             println!("Parsed {} records", cnt);
         }
         if !record.is_duplicate() && !record.is_secondary() {
@@ -158,18 +155,15 @@ fn main() {
     let h5_path = top.join("molecule_info.h5");
 
     std::fs::copy(&h5_path, &outfile).expect("Could not copy original h5 file");
-    let mut h5f = h5::File::open(outfile, "r+").expect("Could not open hdf5 output file (copy of original).");
+    let h5f = h5::File::open(outfile, "r+").expect("Could not open hdf5 output file (copy of original).");
     //let a = f.group("/").unwrap();
-
-
-    let metrics = parse_bam_for_metrics(bam_path.as_path());
 
     let bcs = h5f.dataset("/barcode_idx").expect("h5 file did not contain barcode_idx");
     let umis = h5f.dataset("/umi").expect("H5 file did not contain umi");
-    println!("Barcode size {}", bcs.size());
-    println!("Barcode scalar {}", bcs.is_scalar());
-        
     let n_barcodes : usize = bcs.size();
+    let metrics = parse_bam_for_metrics(bam_path.as_path(), n_barcodes);
+
+        
     // Create vectors to output
     let mut non_conf_mapped = vec![0u32; n_barcodes];
     let mut conf_mapped = vec![0u32; n_barcodes];
@@ -211,7 +205,7 @@ mod tests {
     #[test]
     fn bc_to_umi() {
         let arr = "ACGTAAACTTTTCGAT".as_bytes();
-        let result = barcode_str_to_u64(&arr);
+        let result = super::barcode_str_to_u64(&arr);
         assert_eq!(453115747, result);
     }
 }
