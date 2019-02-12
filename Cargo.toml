@@ -15,6 +15,6 @@ ndarray=">0.0.0"
 
 
 [dependencies.hdf5-rs]
-#features = ["conda"]
+features = ["conda"]
 git = "https://github.com/pmarks/hdf5-rs.git"
 branch= "pmarks/linking"
