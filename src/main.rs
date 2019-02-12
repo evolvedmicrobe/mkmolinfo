@@ -139,18 +139,14 @@ fn main() {
             .short("o")
             .long("output")
             .value_name("FILE")
-            .help("Specify an output file name (default molecule_info.h5)")
+            .help("Specify an output file name (default molecule_info_new.h5)")
             .required(false))
         .get_matches();
 
-    // Gets a value for config if supplied by user, or defaults to "default.conf"
     let outfile = matches.value_of("OUTPUT").unwrap_or("molecule_info_new.h5");
-    // Calling .unwrap() is safe here because "INPUT" is required (if "INPUT" wasn't
-    // required we could have used an 'if let' to conditionally get the value)
     let out_dir = matches.value_of("DIR").unwrap();
     let top = Path::new(out_dir).join("outs");
 
-    // Get the transcriptome path
     let bam_path = top.join("possorted_genome_bam.bam");
     let h5_path = top.join("molecule_info.h5");
 
@@ -162,7 +158,7 @@ fn main() {
     let umis = h5f.dataset("/umi").expect("H5 file did not contain umi");
     let n_barcodes : usize = bcs.size();
     let metrics = parse_bam_for_metrics(bam_path.as_path(), n_barcodes);
-
+    println!("Metrics contains: {} barcodes infos", metrics.len());
         
     // Create vectors to output
     let mut non_conf_mapped = vec![0u32; n_barcodes];
@@ -173,16 +169,19 @@ fn main() {
 
     let bcs_i = bcs.read_1d::<u64>().expect("Could not read in barcodes");
     let umi_i = umis.read_1d::<u64>().expect("Could not read in umis");
-
+    let mut  found =0;
+    let mut notfound = 0;
     //for (i, (bc, umi)) in bcs_i.zip(umi_i).enumerate() {
     for i in 1..bcs_i.len() {
         let bc = bcs_i[i];
         let umi = umi_i[i];
         let hash_key = combine_bc_and_umi(bc, umi);
         if !metrics.contains_key(&hash_key) {
-            //println!("Error! A barcode in file was not found in BAM");
+            notfound +=1;
+            //println!("Error! A barcode/umi in file was not found in BAM. BC: {} UMI {}", bc, umi);
             //std::process::exit(1);
         } else {
+            found +=1;
             let cnts = metrics.get(&hash_key).unwrap();
             non_conf_mapped[i] = cnts.nonconf_mapped_reads;
             conf_mapped[i] = cnts.conf_mapped;
@@ -191,7 +190,7 @@ fn main() {
             unmapped[i] = cnts.unmapped_reads;
         }
     }
-    println!("Size is {}", bc_corrected.len());
+    println!("Found: {}, Not Found: {}", found, notfound);
     let a = h5f.group("/").unwrap();
     write_array(non_conf_mapped, "nonconf_mapped_reads", &a);
     write_array(conf_mapped, "conf_mapped", &a); // This name is different
