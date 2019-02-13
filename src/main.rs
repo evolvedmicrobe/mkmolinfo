@@ -28,7 +28,8 @@ use h5::types::FixedAscii;
 struct barcode_counts {
     //barcode: u64,
     //umi: u64,
-    total_reads: u32,
+    feature_mapped: String,
+    total_reads: u32, // these are total confidentally mapped
     barcode_corrected_reads: u32,
     conf_mapped: u32,
     nonconf_mapped_reads: u32,
@@ -61,11 +62,14 @@ fn combine_bc_and_umi(bc: u64, umi:u64) -> u64 {
     return combined;
 }
 
-fn parse_bam_for_metrics(bamname : &Path, n_mols : usize, verbose : bool) -> HashMap<u64, barcode_counts> {
+
+
+
+fn parse_bam_for_metrics(bamname : &Path, bc_recs: &mut HashMap<u64, barcode_counts>, verbose : bool) -> () {
     let mut in_bam = bam::Reader::from_path(bamname).expect("Failed to open BAM");
     let mut cnt: i32 = 1;
     let mut record: Record = Record::new();
-    let mut bc_recs: HashMap<u64, barcode_counts> = HashMap::with_capacity(n_mols);
+
 
     while let Ok(_) = in_bam.read(&mut record) {
         cnt += 1;
@@ -79,16 +83,30 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize, verbose : bool) -> Has
                 std::process::exit(1);
             }
             if let Some(Aux::String(umi)) = record.aux(b"UB") {
-                    let trimmed_bc = &barcode[..barcode.len() - 2];
-                    let bc_i = barcode_str_to_u64(&trimmed_bc); // cut-off "-1"
-                    let umi_i = barcode_str_to_u64(&umi);
-                    let combined = combine_bc_and_umi(bc_i, umi_i);
-                    let cnts = bc_recs.entry(combined).or_default();
+                let trimmed_bc = &barcode[..barcode.len() - 2];
+                let bc_i = barcode_str_to_u64(&trimmed_bc); // cut-off "-1"
+                let umi_i = barcode_str_to_u64(&umi);
+                let combined = combine_bc_and_umi(bc_i, umi_i);
+                if bc_recs.contains_key(&combined) {
+
+                    // if this wasn't in our list, forget about it
+                    // if let Some(ref cnts) = bc_recs.get_mut(&bc_i) {
+                   let cnts = bc_recs.entry(combined).or_default();
+
+                    // See if feature matches
+                    if let Some(Aux::String(fx)) = record.aux(b"fx") {
+                        let fxs = String::from_utf8_lossy(fx).to_string();
+                        //println!("{} - {}", fxs, cnts.feature_mapped);
+                        if fxs == cnts.feature_mapped {
+                            cnts.total_reads += 1;
+                        }
+                    }
+
                     cnts.total_reads += 1;
                     //if !record.is_duplicate() && !record.is_secondary() {
-                        // Check for barcode correction
+                    // Check for barcode correction
                     if let Some(Aux::String(raw_barcode)) = record.aux(b"CR") {
-                        let bc_matches = trimmed_bc.iter().zip(raw_barcode.iter()).all(|(x, y)| x==y);
+                        let bc_matches = trimmed_bc.iter().zip(raw_barcode.iter()).all(|(x, y)| x == y);
                         if !bc_matches {
                             cnts.barcode_corrected_reads += 1;
                         }
@@ -112,11 +130,10 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize, verbose : bool) -> Has
                             cnts.conf_mapped += 1;
                         }
                     }
-                //}
+                }
             }
         }
     }
-    return bc_recs;
 }
 
 fn write_array(arr :&Vec<u32>, name : &str, h5f : &h5::Group) {
@@ -162,12 +179,77 @@ fn main() {
     let h5f = h5::File::open(outfile, "r+").expect("Could not open hdf5 output file (copy of original).");
     //let a = f.group("/").unwrap();
 
-    let bcs = h5f.dataset("/barcode_idx").expect("h5 file did not contain barcode_idx");
-    let umis = h5f.dataset("/umi").expect("H5 file did not contain umi");
-    let bc_strings = h5f.dataset("/barcodes").expect("H5 file did not contain barcodes");
 
-    let n_barcodes : usize = bcs.size();
-    let metrics = parse_bam_for_metrics(bam_path.as_path(), n_barcodes, verbose);
+
+    // Read through the hdf5 and define each feature a read maps to.
+
+    let bcs_i =  {
+        let bcs = h5f.dataset("/barcode_idx").expect("h5 file did not contain barcode_idx");
+        bcs.read_1d::<u64>().expect("Could not read in barcodes.")
+    };
+    let umi_i =  {
+        let umis = h5f.dataset("/umi").expect("H5 file did not contain umi");
+        umis.read_1d::<u64>().expect("Could not read in UMIs.")
+    };
+
+    let n_barcodes : usize = bcs_i.len();
+
+    // load barcode strings
+    let barcode_str =  {
+        const FBC : usize = 18;
+        let bc_strings = h5f.dataset("/barcodes").expect("H5 file did not contain barcodes");
+        bc_strings.read_1d::<FixedAscii<[u8;FBC]>>().expect("Could not read in barcode strings")
+    };
+
+    // Load feature strings
+    let feature_idx = {
+        let feature_i = h5f.dataset("/feature_idx").expect("Could not find feature_idx in H5 file");
+        feature_i.read_1d::<u32>().expect("Could not read in feature idx")
+    };
+
+    let feature_str =  {
+        let feature_h5 = h5f.dataset("/features/id").expect("Could not find feature IDs in H5 file.");
+        feature_h5.read_1d::<FixedAscii<[u8;25]>>().expect("Could not read in feature strings")
+    };
+
+    let mut bc_translate = {
+        let mut maker = vec![0u64; barcode_str.len()];
+        for i in 0..barcode_str.len() {
+            let bcbytes = barcode_str[i].as_bytes();
+            if bcbytes.len() > 16 {
+                println!("Error: Barcode is from multiple GEM groups, only one is supported:.  Please email the author to enable this. BC: {}", String::from_utf8_lossy(bcbytes).to_string());
+                std::process::exit(1);
+            }
+            let bc_t = barcode_str_to_u64(bcbytes);
+            maker[i] = bc_t;
+        }
+        maker
+    };
+
+    // Initialize map with barcodes of interest
+    let mut metrics: HashMap<u64, barcode_counts> = HashMap::with_capacity(n_barcodes);
+
+    for i in 0..bcs_i.len() {
+        let bci = bcs_i[i] as usize;
+        let bct = bc_translate[bci];
+        let key = combine_bc_and_umi(bct as u64, umi_i[i] as u64);
+        let feature_index = feature_idx[i] as usize;
+        let cnt = barcode_counts {
+            feature_mapped : String::from_utf8_lossy(feature_str[feature_index].as_bytes()).to_string(),
+            total_reads: 0,
+            barcode_corrected_reads: 0,
+            conf_mapped: 0,
+            nonconf_mapped_reads: 0,
+            umi_corrected_reads: 0,
+            unmapped_reads: 0,
+        };
+        metrics.insert(key, cnt);
+    }
+
+
+    parse_bam_for_metrics(bam_path.as_path(), &mut metrics, verbose);
+    
+
     if (verbose) {
         println!("BAM parsing produced metrics for {} barcodes/UMIs.", metrics.len());
     }
@@ -182,19 +264,6 @@ fn main() {
         false => None
     };
 
-    let bcs_i = bcs.read_1d::<u64>().expect("Could not read in barcodes.");
-    let umi_i = umis.read_1d::<u64>().expect("Could not read in UMIs.");
-    const FBC : usize = 18;
-    let barcode_str = bc_strings.read_1d::<FixedAscii<[u8;FBC]>>().expect("Could not read in barcode strings");
-    let mut bc_translate = vec![0u64; barcode_str.len()];
-    for i in 0..barcode_str.len() {
-        let bcbytes = barcode_str[i].as_bytes();
-        if bcbytes.len() > 16 {
-            println!("Error: Barcode is from multiple GEM groups, only one is supported:.  Please email the author to enable this. BC: {}", String::from_utf8_lossy(bcbytes).to_string());
-            std::process::exit(1);
-        }
-        bc_translate[i] = barcode_str_to_u64(bcbytes);
-    }
     let mut  found = 0;
     let mut notfound = 0;
     //for (i, (bc, umi)) in bcs_i.zip(umi_i).enumerate() {
@@ -204,12 +273,15 @@ fn main() {
         let umi = umi_i[i];
         let hash_key = combine_bc_and_umi(bc, umi);
         if !metrics.contains_key(&hash_key) {
-            notfound +=1;
-            //println!("Error! A barcode/umi in file was not found in BAM. BC: {} UMI {}", bc, umi);
-            //std::process::exit(1);
+            println!("Logic error! Previously entered BC no longer in hashmap.");
+            std::process::exit(1);
         } else {
-            found +=1;
             let cnts = metrics.get(&hash_key).unwrap();
+            if cnts.total_reads > 0 {
+                found +=1;
+            } else {
+                notfound +=1;
+            }
             non_conf_mapped[i] = cnts.nonconf_mapped_reads;
             conf_mapped[i] = cnts.conf_mapped;
             bc_corrected[i] = cnts.barcode_corrected_reads;
