@@ -72,22 +72,21 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize, verbose : bool) -> Has
         if (cnt % 10000000 == 0) & verbose {
             println!("Parsed {} BAM records", cnt);
         }
-        if !record.is_duplicate() && !record.is_secondary() {
-            if let Some(Aux::String(barcode)) = record.aux(b"CB") {
-                if barcode[barcode.len() - 1] != b'1' {
-                    println!("Error: Barcode is from multiple GEM groups, only one is supported. Please email the author to enable this. BC: {}", String::from_utf8_lossy(barcode).to_string());
-                    std::process::exit(1);
-                }
-                if let Some(Aux::String(umi)) = record.aux(b"UB") {
+       
+        if let Some(Aux::String(barcode)) = record.aux(b"CB") {
+            if barcode[barcode.len() - 1] != b'1' {
+                println!("Error: Barcode is from multiple GEM groups, only one is supported. Please email the author to enable this. BC: {}", String::from_utf8_lossy(barcode).to_string());
+                std::process::exit(1);
+            }
+            if let Some(Aux::String(umi)) = record.aux(b"UB") {
                     let trimmed_bc = &barcode[..barcode.len() - 2];
                     let bc_i = barcode_str_to_u64(&trimmed_bc); // cut-off "-1"
                     let umi_i = barcode_str_to_u64(&umi);
                     let combined = combine_bc_and_umi(bc_i, umi_i);
                     let cnts = bc_recs.entry(combined).or_default();
                     cnts.total_reads += 1;
-
-
-                    // Check for barcode correction
+                    //if !record.is_duplicate() && !record.is_secondary() {
+                        // Check for barcode correction
                     if let Some(Aux::String(raw_barcode)) = record.aux(b"CR") {
                         let bc_matches = trimmed_bc.iter().zip(raw_barcode.iter()).all(|(x, y)| x==y);
                         if !bc_matches {
@@ -113,7 +112,7 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize, verbose : bool) -> Has
                             cnts.conf_mapped += 1;
                         }
                     }
-                }
+                //}
             }
         }
     }
