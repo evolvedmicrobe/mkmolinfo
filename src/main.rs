@@ -136,19 +136,10 @@ fn parse_bam_for_metrics(bamname : &Path, bc_recs: &mut HashMap<u64, barcode_cou
     }
 }
 
-fn write_array(arr :&Vec<u32>, name : &str, h5f : &h5::Group) {
-    let ds1 = h5f.new_dataset::<u32>()
+fn write_array<T : h5::H5Type>(arr :&Vec<T>, name : &str, h5f : &h5::Group) {
+    let ds1 = h5f.new_dataset::<T>()
     .shuffle(true).gzip(1).chunk_infer()
     .create(name, arr.len()).unwrap();
-    //let arr = Array1::from(arr);
-    ds1.write(arr.as_slice()).unwrap();
-}
-
-fn write_array64(arr :&Vec<u64>, name : &str, h5f : &h5::Group) {
-    let ds1 = h5f.new_dataset::<u64>()
-        .shuffle(true).gzip(1).chunk_infer()
-        .create(name, arr.len()).unwrap();
-    //let arr = Array1::from(arr);
     ds1.write(arr.as_slice()).unwrap();
 }
 
@@ -308,7 +299,7 @@ fn main() {
     write_array(&bc_corrected, "barcode_corrected_reads", &a);
     write_array(&unmapped, "unmapped_reads", &a);
     write_array(&reads, "reads", &a);
-    write_array64(&barcodes, "barcode", &a);
+    write_array(&barcodes, "barcode", &a);
 }
 
 #[cfg(test)]
