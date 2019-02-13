@@ -28,7 +28,7 @@ use h5::types::FixedAscii;
 struct barcode_counts {
     //barcode: u64,
     //umi: u64,
-    feature_mapped: String,
+    // feature_mapped: String,
     total_reads: u32, // these are total confidentally mapped
     barcode_corrected_reads: u32,
     conf_mapped: u32,
@@ -93,14 +93,14 @@ fn parse_bam_for_metrics(bamname : &Path, bc_recs: &mut HashMap<u64, barcode_cou
                     // if let Some(ref cnts) = bc_recs.get_mut(&bc_i) {
                    let cnts = bc_recs.entry(combined).or_default();
 
-                    // See if feature matches
+/*                    // See if feature matches
                     if let Some(Aux::String(fx)) = record.aux(b"fx") {
                         let fxs = String::from_utf8_lossy(fx).to_string();
                         //println!("{} - {}", fxs, cnts.feature_mapped);
                         if fxs == cnts.feature_mapped {
                             cnts.total_reads += 1;
                         }
-                    }
+                    }*/
 
                     cnts.total_reads += 1;
                     //if !record.is_duplicate() && !record.is_secondary() {
@@ -143,6 +143,15 @@ fn write_array(arr :&Vec<u32>, name : &str, h5f : &h5::Group) {
     //let arr = Array1::from(arr);
     ds1.write(arr.as_slice()).unwrap();
 }
+
+fn write_array64(arr :&Vec<u64>, name : &str, h5f : &h5::Group) {
+    let ds1 = h5f.new_dataset::<u64>()
+        .shuffle(true).gzip(1).chunk_infer()
+        .create(name, arr.len()).unwrap();
+    //let arr = Array1::from(arr);
+    ds1.write(arr.as_slice()).unwrap();
+}
+
 
 fn main() {
     let matches = App::new("mkmolinfo")
@@ -201,7 +210,7 @@ fn main() {
         bc_strings.read_1d::<FixedAscii<[u8;FBC]>>().expect("Could not read in barcode strings")
     };
 
-    // Load feature strings
+/*    // Load feature strings
     let feature_idx = {
         let feature_i = h5f.dataset("/feature_idx").expect("Could not find feature_idx in H5 file");
         feature_i.read_1d::<u32>().expect("Could not read in feature idx")
@@ -210,7 +219,7 @@ fn main() {
     let feature_str =  {
         let feature_h5 = h5f.dataset("/features/id").expect("Could not find feature IDs in H5 file.");
         feature_h5.read_1d::<FixedAscii<[u8;25]>>().expect("Could not read in feature strings")
-    };
+    };*/
 
     let mut bc_translate = {
         let mut maker = vec![0u64; barcode_str.len()];
@@ -233,9 +242,9 @@ fn main() {
         let bci = bcs_i[i] as usize;
         let bct = bc_translate[bci];
         let key = combine_bc_and_umi(bct as u64, umi_i[i] as u64);
-        let feature_index = feature_idx[i] as usize;
+        //let feature_index = feature_idx[i] as usize;
         let cnt = barcode_counts {
-            feature_mapped : String::from_utf8_lossy(feature_str[feature_index].as_bytes()).to_string(),
+            //feature_mapped : String::from_utf8_lossy(feature_str[feature_index].as_bytes()).to_string(),
             total_reads: 0,
             barcode_corrected_reads: 0,
             conf_mapped: 0,
@@ -259,12 +268,10 @@ fn main() {
     let mut bc_corrected = vec![0u32; n_barcodes];
     let mut umi_corrected = vec![0u32; n_barcodes];
     let mut unmapped = vec![0u32; n_barcodes];
-    let mut bam_counts = match bam_counts_out {
-        true => Some(vec![0; n_barcodes]),
-        false => None
-    };
+    let mut reads= vec![0u32; n_barcodes];
+    let mut barcodes = vec![0u64; n_barcodes];
 
-    let mut  found = 0;
+    let mut found = 0;
     let mut notfound = 0;
     //for (i, (bc, umi)) in bcs_i.zip(umi_i).enumerate() {
     for i in 0..bcs_i.len() {
@@ -287,22 +294,21 @@ fn main() {
             bc_corrected[i] = cnts.barcode_corrected_reads;
             umi_corrected[i] = cnts.umi_corrected_reads;
             unmapped[i] = cnts.unmapped_reads;
-            if let Some(ref mut v) = bam_counts {
-                v[i] = cnts.total_reads;
-            }
-
+            reads[i] = cnts.total_reads;
+            barcodes[i] = bc;
         }
     }
-    println!("Barcodes in original molecule_info.h5 found in BAM = {}, not found = {}", found, notfound);
+    if verbose {
+        println!("Barcodes in original molecule_info.h5 found in BAM = {}, not found = {}", found, notfound);
+    }
     let a = h5f.group("/").unwrap();
     write_array(&non_conf_mapped, "nonconf_mapped_reads", &a);
     write_array(&conf_mapped, "conf_mapped", &a); // This name is different
     write_array(&umi_corrected, "umi_corrected_reads", &a);
     write_array(&bc_corrected, "barcode_corrected_reads", &a);
     write_array(&unmapped, "unmapped_reads", &a);
-    if let Some(ref v) = bam_counts {
-        write_array(v, "bam_read_counts", &a);
-    }
+    write_array(&reads, "reads", &a);
+    write_array64(&barcodes, "barcode", &a);
 }
 
 #[cfg(test)]
