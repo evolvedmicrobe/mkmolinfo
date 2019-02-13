@@ -127,6 +127,14 @@ fn write_array(arr :&Vec<u32>, name : &str, h5f : &h5::Group) {
     ds1.write(arr.as_slice()).unwrap();
 }
 
+fn write_array64(arr :&Vec<u64>, name : &str, h5f : &h5::Group) {
+    let ds1 = h5f.new_dataset::<u64>()
+        .shuffle(true).gzip(1).chunk_infer()
+        .create(name, arr.len()).unwrap();
+    //let arr = Array1::from(arr);
+    ds1.write(arr.as_slice()).unwrap();
+}
+
 fn main() {
     let matches = App::new("mkmolinfo")
         .version("1.0")
@@ -177,10 +185,8 @@ fn main() {
     let mut bc_corrected = vec![0u32; n_barcodes];
     let mut umi_corrected = vec![0u32; n_barcodes];
     let mut unmapped = vec![0u32; n_barcodes];
-    let mut bam_counts = match bam_counts_out {
-        true => Some(vec![0; n_barcodes]),
-        false => None
-    };
+    let mut reads = vec![0; n_barcodes];
+    let mut barcode = vec![0u64; n_barcodes];
 
     let bcs_i = bcs.read_1d::<u64>().expect("Could not read in barcodes.");
     let umi_i = umis.read_1d::<u64>().expect("Could not read in UMIs.");
@@ -215,10 +221,8 @@ fn main() {
             bc_corrected[i] = cnts.barcode_corrected_reads;
             umi_corrected[i] = cnts.umi_corrected_reads;
             unmapped[i] = cnts.unmapped_reads;
-            if let Some(ref mut v) = bam_counts {
-                v[i] = cnts.total_reads;
-            }
-
+            reads[i] = cnts.total_reads;
+            barcode[i] = bc;
         }
     }
     println!("Barcodes in original molecule_info.h5 found in BAM = {}, not found = {}", found, notfound);
@@ -228,9 +232,9 @@ fn main() {
     write_array(&umi_corrected, "umi_corrected_reads", &a);
     write_array(&bc_corrected, "barcode_corrected_reads", &a);
     write_array(&unmapped, "unmapped_reads", &a);
-    if let Some(ref v) = bam_counts {
-        write_array(v, "bam_read_counts", &a);
-    }
+    write_array(&reads, "reads", &a);
+    write_array64(&barcode, "barcode", &a);
+
 }
 
 #[cfg(test)]
