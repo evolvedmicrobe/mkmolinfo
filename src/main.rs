@@ -19,6 +19,7 @@ use rust_htslib::bam::record::{Aux,Record};
 //#[macro_use] extern crate failure_derive;
 
 extern crate h5;
+use h5::types::FixedAscii;
 //use h5::File;
 
 //use hdf5_rs::prelude::*;
@@ -27,6 +28,7 @@ extern crate h5;
 struct barcode_counts {
     //barcode: u64,
     //umi: u64,
+    total_reads: u32,
     barcode_corrected_reads: u32,
     conf_mapped: u32,
     nonconf_mapped_reads: u32,
@@ -59,7 +61,7 @@ fn combine_bc_and_umi(bc: u64, umi:u64) -> u64 {
     return combined;
 }
 
-fn parse_bam_for_metrics(bamname : &Path, n_mols : usize) -> HashMap<u64, barcode_counts> {
+fn parse_bam_for_metrics(bamname : &Path, n_mols : usize, verbose : bool) -> HashMap<u64, barcode_counts> {
     let mut in_bam = bam::Reader::from_path(bamname).expect("Failed to open BAM");
     let mut cnt: i32 = 1;
     let mut record: Record = Record::new();
@@ -67,13 +69,13 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize) -> HashMap<u64, barcod
 
     while let Ok(_) = in_bam.read(&mut record) {
         cnt += 1;
-        if cnt % 10000000 == 0 {
-            println!("Parsed {} records", cnt);
+        if (cnt % 10000000 == 0) & verbose {
+            println!("Parsed {} BAM records", cnt);
         }
         if !record.is_duplicate() && !record.is_secondary() {
             if let Some(Aux::String(barcode)) = record.aux(b"CB") {
                 if barcode[barcode.len() - 1] != b'1' {
-                    println!("Error: Barcode is from multiple GEM groups, only one is supported: {}", String::from_utf8_lossy(barcode).to_string());
+                    println!("Error: Barcode is from multiple GEM groups, only one is supported. Please email the author to enable this. BC: {}", String::from_utf8_lossy(barcode).to_string());
                     std::process::exit(1);
                 }
                 if let Some(Aux::String(umi)) = record.aux(b"UB") {
@@ -82,6 +84,7 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize) -> HashMap<u64, barcod
                     let umi_i = barcode_str_to_u64(&umi);
                     let combined = combine_bc_and_umi(bc_i, umi_i);
                     let cnts = bc_recs.entry(combined).or_default();
+                    cnts.total_reads += 1;
 
 
                     // Check for barcode correction
@@ -117,7 +120,7 @@ fn parse_bam_for_metrics(bamname : &Path, n_mols : usize) -> HashMap<u64, barcod
     return bc_recs;
 }
 
-fn write_array(arr :Vec<u32>, name : &str, h5f : &h5::Group) {
+fn write_array(arr :&Vec<u32>, name : &str, h5f : &h5::Group) {
     let ds1 = h5f.new_dataset::<u32>()
     .shuffle(true).gzip(1).chunk_infer()
     .create(name, arr.len()).unwrap();
@@ -129,10 +132,10 @@ fn main() {
     let matches = App::new("mkmolinfo")
         .version("1.0")
         .author("Nigel Delaney <nigel.delaney@10xgenomics.com>")
-        .about("Takes a path to a CellRanger Output directory and creates an older (CellRanger < 3.0) style molecule_info.h5 file.")
+        .about("Takes a path to a Cell Ranger Output directory and creates an older (Cell Ranger < 3.0) style molecule_info.h5 file.")
         .arg(Arg::with_name("DIR")
             .value_name("OUT_DIRECTORY")
-            .help("Specify the output directory produced by CellRanger")
+            .help("Specify the output directory produced by Cell Ranger")
             .required(true)
             .index(1))
         .arg(Arg::with_name("OUTPUT")
@@ -141,12 +144,18 @@ fn main() {
             .value_name("FILE")
             .help("Specify an output file name (default molecule_info_new.h5)")
             .required(false))
+        .arg(Arg::with_name("v")
+            .short("v")
+            .multiple(true)
+            .help("Print progress as program parses through BAM file."))
         .get_matches();
 
     let outfile = matches.value_of("OUTPUT").unwrap_or("molecule_info_new.h5");
     let out_dir = matches.value_of("DIR").unwrap();
     let top = Path::new(out_dir).join("outs");
-
+    let vcount = matches.occurrences_of("v");
+    let verbose = vcount > 0;
+    let bam_counts_out = vcount > 1;
     let bam_path = top.join("possorted_genome_bam.bam");
     let h5_path = top.join("molecule_info.h5");
 
@@ -156,24 +165,43 @@ fn main() {
 
     let bcs = h5f.dataset("/barcode_idx").expect("h5 file did not contain barcode_idx");
     let umis = h5f.dataset("/umi").expect("H5 file did not contain umi");
+    let bc_strings = h5f.dataset("/barcodes").expect("H5 file did not contain barcodes");
+
     let n_barcodes : usize = bcs.size();
-    let metrics = parse_bam_for_metrics(bam_path.as_path(), n_barcodes);
-    println!("Metrics contains: {} barcodes infos", metrics.len());
-        
+    let metrics = parse_bam_for_metrics(bam_path.as_path(), n_barcodes, verbose);
+    if (verbose) {
+        println!("BAM parsing produced metrics for {} barcodes/UMIs.", metrics.len());
+    }
     // Create vectors to output
     let mut non_conf_mapped = vec![0u32; n_barcodes];
     let mut conf_mapped = vec![0u32; n_barcodes];
     let mut bc_corrected = vec![0u32; n_barcodes];
     let mut umi_corrected = vec![0u32; n_barcodes];
     let mut unmapped = vec![0u32; n_barcodes];
+    let mut bam_counts = match bam_counts_out {
+        true => Some(vec![0; n_barcodes]),
+        false => None
+    };
 
-    let bcs_i = bcs.read_1d::<u64>().expect("Could not read in barcodes");
-    let umi_i = umis.read_1d::<u64>().expect("Could not read in umis");
-    let mut  found =0;
+    let bcs_i = bcs.read_1d::<u64>().expect("Could not read in barcodes.");
+    let umi_i = umis.read_1d::<u64>().expect("Could not read in UMIs.");
+    const FBC : usize = 18;
+    let barcode_str = bc_strings.read_1d::<FixedAscii<[u8;FBC]>>().expect("Could not read in barcode strings");
+    let mut bc_translate = vec![0u64; barcode_str.len()];
+    for i in 0..barcode_str.len() {
+        let bcbytes = barcode_str[i].as_bytes();
+        if bcbytes.len() > 16 {
+            println!("Error: Barcode is from multiple GEM groups, only one is supported:.  Please email the author to enable this. BC: {}", String::from_utf8_lossy(bcbytes).to_string());
+            std::process::exit(1);
+        }
+        bc_translate[i] = barcode_str_to_u64(bcbytes);
+    }
+    let mut  found = 0;
     let mut notfound = 0;
     //for (i, (bc, umi)) in bcs_i.zip(umi_i).enumerate() {
-    for i in 1..bcs_i.len() {
-        let bc = bcs_i[i];
+    for i in 0..bcs_i.len() {
+        let barcode_index = bcs_i[i] as usize;
+        let bc = bc_translate[barcode_index];
         let umi = umi_i[i];
         let hash_key = combine_bc_and_umi(bc, umi);
         if !metrics.contains_key(&hash_key) {
@@ -188,15 +216,22 @@ fn main() {
             bc_corrected[i] = cnts.barcode_corrected_reads;
             umi_corrected[i] = cnts.umi_corrected_reads;
             unmapped[i] = cnts.unmapped_reads;
+            if let Some(ref mut v) = bam_counts {
+                v[i] = cnts.total_reads;
+            }
+
         }
     }
-    println!("Found: {}, Not Found: {}", found, notfound);
+    println!("Barcodes in original molecule_info.h5 found in BAM = {}, not found = {}", found, notfound);
     let a = h5f.group("/").unwrap();
-    write_array(non_conf_mapped, "nonconf_mapped_reads", &a);
-    write_array(conf_mapped, "conf_mapped", &a); // This name is different
-    write_array(umi_corrected, "umi_corrected_reads", &a);
-    write_array(bc_corrected, "barcode_corrected_reads", &a);
-    write_array(unmapped, "unmapped_reads", &a);
+    write_array(&non_conf_mapped, "nonconf_mapped_reads", &a);
+    write_array(&conf_mapped, "conf_mapped", &a); // This name is different
+    write_array(&umi_corrected, "umi_corrected_reads", &a);
+    write_array(&bc_corrected, "barcode_corrected_reads", &a);
+    write_array(&unmapped, "unmapped_reads", &a);
+    if let Some(ref v) = bam_counts {
+        write_array(v, "bam_read_counts", &a);
+    }
 }
 
 #[cfg(test)]
