@@ -87,8 +87,8 @@ fn parse_bam_for_metrics(bamname : &Path, bc_recs: &mut HashMap<u64, barcode_cou
                 let bc_i = barcode_str_to_u64(&trimmed_bc); // cut-off "-1"
                 let umi_i = barcode_str_to_u64(&umi);
                 let combined = combine_bc_and_umi(bc_i, umi_i);
-                if bc_recs.contains_key(&combined) {
-
+                //if bc_recs.contains_key(&combined) {
+                if let Some(ref mut cnts) = bc_recs.get_mut(&combined) {
                     // if this wasn't in our list, forget about it
                     // if let Some(ref cnts) = bc_recs.get_mut(&bc_i) {
                    let cnts = bc_recs.entry(combined).or_default();
