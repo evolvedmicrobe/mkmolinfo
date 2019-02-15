@@ -87,12 +87,8 @@ fn parse_bam_for_metrics(bamname : &Path, bc_recs: &mut HashMap<u64, barcode_cou
                 let bc_i = barcode_str_to_u64(&trimmed_bc); // cut-off "-1"
                 let umi_i = barcode_str_to_u64(&umi);
                 let combined = combine_bc_and_umi(bc_i, umi_i);
-                //if bc_recs.contains_key(&combined) {
-                if let Some(ref mut cnts) = bc_recs.get_mut(&combined) {
-                    // if this wasn't in our list, forget about it
-                    // if let Some(ref cnts) = bc_recs.get_mut(&bc_i) {
-                   let cnts = bc_recs.entry(combined).or_default();
-
+                // If this BC/UMI wasn't reported, forget about it.
+                if let Some(ref mut cnts) = bc_recs.get_mut(&combined) {                   
 /*                    // See if feature matches
                     if let Some(Aux::String(fx)) = record.aux(b"fx") {
                         let fxs = String::from_utf8_lossy(fx).to_string();
@@ -170,18 +166,15 @@ fn main() {
     let top = Path::new(out_dir).join("outs");
     let vcount = matches.occurrences_of("v");
     let verbose = vcount > 0;
-    let bam_counts_out = vcount > 1;
+    //let bam_counts_out = vcount > 1;
     let bam_path = top.join("possorted_genome_bam.bam");
     let h5_path = top.join("molecule_info.h5");
 
     std::fs::copy(&h5_path, &outfile).expect("Could not copy original h5 file");
     let h5f = h5::File::open(outfile, "r+").expect("Could not open hdf5 output file (copy of original).");
-    //let a = f.group("/").unwrap();
-
-
+    
 
     // Read through the hdf5 and define each feature a read maps to.
-
     let bcs_i =  {
         let bcs = h5f.dataset("/barcode_idx").expect("h5 file did not contain barcode_idx");
         bcs.read_1d::<u64>().expect("Could not read in barcodes.")
@@ -211,7 +204,7 @@ fn main() {
         feature_h5.read_1d::<FixedAscii<[u8;25]>>().expect("Could not read in feature strings")
     };*/
 
-    let mut bc_translate = {
+    let bc_translate = {
         let mut maker = vec![0u64; barcode_str.len()];
         for i in 0..barcode_str.len() {
             let bcbytes = barcode_str[i].as_bytes();
@@ -245,11 +238,10 @@ fn main() {
         metrics.insert(key, cnt);
     }
 
-
     parse_bam_for_metrics(bam_path.as_path(), &mut metrics, verbose);
     
 
-    if (verbose) {
+    if verbose {
         println!("BAM parsing produced metrics for {} barcodes/UMIs.", metrics.len());
     }
     // Create vectors to output
